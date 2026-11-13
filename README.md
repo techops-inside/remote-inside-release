@@ -1,4 +1,4 @@
-# remote-inside-releases
+# remote-inside-release
 
 Repositório **público** só de releases do Remote Inside (o app principal vive num repo
 privado). Existe separado porque o updater (`tauri-plugin-updater`) precisa de um
@@ -7,13 +7,14 @@ privado exigiria embutir um token no app distribuído.
 
 ## Setup (uma vez)
 
-1. Crie este repositório no GitHub como **público**, com o nome usado em
-   `src-tauri/tauri.conf.json` do repo principal (`plugins.updater.endpoints`) — por
-   padrão `MichelDev2005/remote-inside-releases`. Usou outro nome? Edite essa única URL
-   no repo principal.
-2. Copie os arquivos desta pasta (`.github/workflows/release.yml`,
-   `scripts/build-latest-json.mjs`, este `README.md`) para a raiz do novo repositório.
-3. Configure os secrets em Settings → Secrets and variables → Actions:
+1. ~~Crie este repositório no GitHub como público~~ — já feito:
+   `MichelDev2005/remote-inside-release`. As URLs no repo principal
+   (`src-tauri/tauri.conf.json` → `plugins.updater.endpoints` e
+   `installer-ui/src/install.rs` → `MANIFEST_URL`) já apontam para este nome. Trocou de
+   nome/dono depois disso? Edite as duas.
+2. ~~Copie os arquivos desta pasta para a raiz do novo repositório~~ — já estão aqui.
+3. **Pendente (precisa do usuário, não pode ser feito de forma autônoma):** configure
+   os secrets em Settings → Secrets and variables → Actions:
    - `TAURI_SIGNING_PRIVATE_KEY`: conteúdo de `src-tauri/updater.key` do repo principal
      (veja `docs/UPDATER.md` lá).
    - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: só se a chave tiver senha (não é o caso por
