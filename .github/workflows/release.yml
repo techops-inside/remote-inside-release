@@ -1,0 +1,141 @@
+name: release
+
+# Dispara por tag `v*` enviada A ESTE repositório (o de releases, não o repo
+# principal) — ver README.md deste template para o passo manual de enviar a tag aqui.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versão a publicar (ex: 0.2.0), sem o 'v'"
+        required: true
+
+permissions:
+  contents: write # softprops/action-gh-release precisa disso pra criar a Release
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      # Primeiro este repositório (onde estão os scripts), depois o código-fonte real
+      # do repo principal (privado, path `app`) usando um PAT (secret
+      # PRIVATE_REPO_CHECKOUT_TOKEN) — o token padrão da Action só alcança este repo.
+      # Builda sempre o `master` atual do repo principal; shortcut: upgrade pra
+      # "checkout do commit exato aprovado" quando o processo de release precisar de
+      # rastreabilidade mais forte.
+      - name: Checkout deste repositório (scripts)
+        uses: actions/checkout@v4
+
+      - name: Checkout do repo principal (privado)
+        uses: actions/checkout@v4
+        with:
+          repository: MichelDev2005/remote-inside
+          token: ${{ secrets.PRIVATE_REPO_CHECKOUT_TOKEN }}
+          ref: master
+          path: app
+
+      # `env:` em vez de interpolar `${{ }}` direto no script bash — senão um input
+      # malicioso (só quem já tem permissão de escrita no repo consegue disparar
+      # workflow_dispatch, mas mesmo assim) vira código shell executado antes do
+      # passo que carrega TAURI_SIGNING_PRIVATE_KEY.
+      - name: Resolve a versão
+        id: ver
+        shell: bash
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          if [ -n "$VERSION_INPUT" ]; then
+            echo "version=$VERSION_INPUT" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Evita publicar um latest.json com uma versão que o binário, de fato buildado,
+      # não bate — senão o app instalado reporta uma versão e o updater anuncia outra,
+      # e o cliente fica tentando se atualizar pra sempre.
+      - name: Confere se a versão da tag bate com tauri.conf.json
+        shell: bash
+        env:
+          TAG_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          conf_version=$(node -p "require('./app/src-tauri/tauri.conf.json').version")
+          if [ "$conf_version" != "$TAG_VERSION" ]; then
+            echo "versão da tag/input ($TAG_VERSION) != tauri.conf.json ($conf_version)" >&2
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Só instala dependências aqui — não builda o frontend: `npx tauri build`
+      # já roda `beforeBuildCommand` (`npm run build --prefix ui`, ver
+      # app/src-tauri/tauri.conf.json) sozinho, buildar antes seria repetir à toa.
+      - name: Instala dependências
+        shell: bash
+        working-directory: app
+        run: |
+          npm ci
+          npm ci --prefix ui
+
+      - name: tauri build (gera instalador NSIS + assinatura do updater)
+        shell: bash
+        working-directory: app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npx tauri build
+
+      - name: Localiza os artefatos do bundle
+        id: artifacts
+        shell: bash
+        run: |
+          # Workspace Cargo: o target fica na raiz do workspace (app/target), não em
+          # app/src-tauri/target.
+          bundle_dir="app/target/release/bundle/nsis"
+          exe=$(ls "$bundle_dir"/*.exe | head -n1)
+          sig=$(ls "$bundle_dir"/*.exe.sig | head -n1)
+          echo "exe=$exe" >> "$GITHUB_OUTPUT"
+          echo "sig=$sig" >> "$GITHUB_OUTPUT"
+
+      # Dois executáveis diferentes saem desta release e NÃO podem ter o mesmo
+      # nome: o payload NSIS completo (é o que o updater e o instalador fino
+      # baixam, versionado) e o instalador fino em si (é o link estável que fica
+      # no README/site pra quem baixa pela primeira vez — sempre busca a release
+      # mais nova, nunca muda de nome entre versões).
+      - name: Renomeia o payload NSIS pro nome final (versionado)
+        shell: bash
+        run: |
+          cp "${{ steps.artifacts.outputs.exe }}" RemoteInsideFullSetup.exe
+          cp "${{ steps.artifacts.outputs.sig }}" RemoteInsideFullSetup.exe.sig
+
+      - name: Builda o instalador fino (ri-installer-ui)
+        shell: bash
+        working-directory: app
+        run: cargo build -p ri-installer-ui --release
+
+      - name: Copia o instalador fino pro nome estável de download
+        shell: bash
+        run: cp "app/target/release/RemoteInsideSetup.exe" RemoteInsideSetup.exe
+
+      - name: Gera latest.json
+        shell: bash
+        run: |
+          node scripts/build-latest-json.mjs \
+            "${{ steps.ver.outputs.version }}" \
+            "https://github.com/${{ github.repository }}/releases/download/v${{ steps.ver.outputs.version }}/RemoteInsideFullSetup.exe" \
+            "${{ steps.artifacts.outputs.sig }}" \
+            latest.json
+
+      - name: Publica a GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: v${{ steps.ver.outputs.version }}
+          files: |
+            RemoteInsideFullSetup.exe
+            RemoteInsideFullSetup.exe.sig
+            RemoteInsideSetup.exe
+            latest.json
